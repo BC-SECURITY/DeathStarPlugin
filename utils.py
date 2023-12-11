@@ -38,7 +38,9 @@ def posh_table_parser(output):
             word_start_positions.append(index)
 
     keys = title.split()
-    word_pos_to_key = {k: v.lower() for k, v in zip(word_start_positions, keys)}
+    word_pos_to_key = {
+        k: v.lower() for k, v in zip(word_start_positions, keys, strict=False)
+    }
     blocks = blocks[2:]
 
     for row in blocks:
