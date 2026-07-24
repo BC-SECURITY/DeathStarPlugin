@@ -92,9 +92,10 @@ class Plugin(BasePlugin):
     def _hooks(self):
         """Every hook this plugin owns, as (event, name, callback).
 
-        Names are namespaced because the hook registry is global and keyed by
-        name alone -- an unprefixed "get_gpp" would be silently replaced by any
-        other plugin registering the same name.
+        Names are namespaced because the hook registry is keyed by (event,
+        name) and seven of these share BEFORE_TASKING_RESULT_HOOK -- an
+        unprefixed "get_gpp" would be silently replaced by any other plugin
+        registering that name on the same event.
         """
         return [
             (
@@ -346,11 +347,13 @@ class Plugin(BasePlugin):
     @override
     def on_stop(self, db):
         """
-        Drop the tasking-result hooks, so a disabled plugin stops reacting to
-        every agent's results (and stops tasking agents from those reactions).
+        Drop this plugin's hooks, so a disabled plugin stops reacting to every
+        agent's results and check-ins (and stops tasking agents from those
+        reactions).
 
-        Safe to call for a plugin that never started -- unregister_hook ignores
-        names it doesn't know.
+        Safe to call for a plugin that never started -- unregister_hook
+        tolerates names it doesn't know: it removes nothing, and may log that
+        it found nothing to remove.
         """
         for event, name, _callback in self._hooks():
             hooks.unregister_hook(name, event)

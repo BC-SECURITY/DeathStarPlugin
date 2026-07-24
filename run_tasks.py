@@ -89,16 +89,22 @@ class DeathStarTasks:
         agent = self.main_menu.agentsv2.get_by_id(db, session_id)
         params = {
             "Agent": session_id,
-            # Payload and Credentials are internal options, so
-            # convert_module_options drops them entirely and their defaults are
-            # never injected into params -- but evaluate_dependencies still
-            # gates on the raw params dict. Without them, Listener (depends_on
-            # Payload in ['Empire']) and UserName/Password (depends_on
-            # Credentials in ['Manual']) silently fall back to their ''
-            # defaults, and invoke_wmi then raises ModuleValidationException
-            # "Listener or Command required" -- stalling the whole chain.
+            # Payload is internal, so convert_module_options drops it before
+            # validate_options runs -- but evaluate_dependencies still gates on
+            # the raw params dict. Without Payload here, Listener (depends_on
+            # Payload in ['Empire']) fails its dependency check and falls back
+            # to its '' default, so invoke_wmi raises ModuleValidationException
+            # "Listener or Command required" and the whole chain stalls.
+            #
+            # Do NOT also inject Credentials="Manual" to satisfy its dependents:
+            # is_option_required ignores an option's own Required:false once a
+            # depends_on is present and satisfied, so a met Credentials gate
+            # flips the empty UserName/Password below into "required option
+            # missing: UserName". Leaving Credentials out keeps that gate unmet,
+            # so UserName/Password default to '' -- exactly what
+            # invoke_wmi.generate expects for the no-explicit-creds path (it
+            # stages via the listener as the agent's current user).
             "Payload": "Empire",
-            "Credentials": "Manual",
             "Listener": listener,
             "UserName": "",
             "Password": "",
