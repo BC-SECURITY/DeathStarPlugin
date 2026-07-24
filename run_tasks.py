@@ -15,7 +15,7 @@ class DeathStarTasks:
             module_id="powershell_privesc_gpp", options=params
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
@@ -34,7 +34,7 @@ class DeathStarTasks:
             options=params,
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
@@ -55,7 +55,7 @@ class DeathStarTasks:
             options=params,
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
@@ -77,7 +77,7 @@ class DeathStarTasks:
             options=params,
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
@@ -95,7 +95,7 @@ class DeathStarTasks:
             "OutputFunction": "Out-String",
             "ComputerName": computer_name,
             "Obfuscate": "False",
-            "ObfuscationCommand": r"Token\All\1",
+            "ObfuscateCommand": r"Token\All\1",
             "ProxyCreds": "default",
             "Proxy": "default",
             "UserAgent": "default",
@@ -105,7 +105,7 @@ class DeathStarTasks:
             options=params,
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
