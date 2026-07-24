@@ -89,11 +89,24 @@ class DeathStarTasks:
         agent = self.main_menu.agentsv2.get_by_id(db, session_id)
         params = {
             "Agent": session_id,
+            # Payload and Credentials are internal options, so
+            # convert_module_options drops them entirely and their defaults are
+            # never injected into params -- but evaluate_dependencies still
+            # gates on the raw params dict. Without them, Listener (depends_on
+            # Payload in ['Empire']) and UserName/Password (depends_on
+            # Credentials in ['Manual']) silently fall back to their ''
+            # defaults, and invoke_wmi then raises ModuleValidationException
+            # "Listener or Command required" -- stalling the whole chain.
+            "Payload": "Empire",
+            "Credentials": "Manual",
             "Listener": listener,
             "UserName": "",
             "Password": "",
             "OutputFunction": "Out-String",
             "ComputerName": computer_name,
+            # Obfuscate gates ObfuscateCommand, so with Obfuscate False the
+            # command below is unused and the module falls back to this same
+            # default. Kept so the pair stays correct if it's ever turned on.
             "Obfuscate": "False",
             "ObfuscateCommand": r"Token\All\1",
             "ProxyCreds": "default",

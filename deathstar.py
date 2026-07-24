@@ -49,7 +49,8 @@ class Plugin(BasePlugin):
                 plugin_id=self.info.id,
                 input=deathstar_input,
                 input_full=deathstar_input,
-                user_id=user.id,
+                # None on the auto_execute path, where there is no request user.
+                user_id=user.id if user else None,
                 status=PluginTaskStatus.started,
             )
             plugin_task.output = f"[*] Starting Recon Scan: {agent_name}\n"
@@ -58,6 +59,13 @@ class Plugin(BasePlugin):
             self.plugin_task_id = plugin_task.id
 
             agent = self.main_menu.agentsv2.get_by_id(db, agent_name)
+            if agent is None:
+                # get_by_id matches on session_id only, but the option is
+                # described as "Name of Agent" and agents are renameable, so a
+                # renamed agent lands here rather than on a stray AttributeError.
+                raise PluginValidationException(
+                    f"Agent not found: {agent_name}. Use the agent's session ID."
+                )
             self.session_id = agent.session_id
             self.listener_name = agent.listener
             params = {"Agent": self.session_id, "OutputFunction": "Out-String"}
