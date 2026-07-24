@@ -7,6 +7,10 @@ from empire.server.api.v2.agent.agent_task_dto import ModulePostRequest
 from empire.server.core.plugins import BasePlugin
 from empire.server.core.db import models
 from empire.server.core.db.models import PluginTaskStatus
+from empire.server.core.exceptions import (
+    PluginExecutionException,
+    PluginValidationException,
+)
 from empire.server.core.hooks import hooks
 from empire.server.core.plugin_service import PluginService
 from .run_tasks import DeathStarTasks
@@ -65,19 +69,20 @@ class Plugin(BasePlugin):
             )
 
             if err:
-                return f"[!] Error running module: {err}z"
-            else:
-                self.task_ids["domain_sid"] = res.id
+                raise PluginExecutionException(f"Error running module: {err}")
+
+            self.task_ids["domain_sid"] = res.id
             return "[*] Starting DeathStar..."
 
+        except (PluginValidationException, PluginExecutionException):
+            raise
         except Exception as e:
-            log.error(e)
+            log.error(e, exc_info=True)
             self.send_socketio_message(f"[!] {e}")
-            return False
+            raise PluginExecutionException(str(e)) from e
 
     @override
     def on_start(self, db):
-        self.install_path = self.main_menu.installPath
         self.plugin_service: PluginService = self.main_menu.pluginsv2
         self.task_ids = {}
         self.domain_controllers = None
@@ -113,7 +118,7 @@ class Plugin(BasePlugin):
         )
 
     def get_task(self, db, task_id: int):
-        plugin = self.plugin_service.get_by_id(db, "deathstar")
+        plugin = self.plugin_service.get_by_id(db, self.info.id)
         if plugin:
             task = (
                 db.query(models.PluginTask)
