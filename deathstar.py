@@ -7,6 +7,10 @@ from empire.server.api.v2.agent.agent_task_dto import ModulePostRequest
 from empire.server.core.plugins import BasePlugin
 from empire.server.core.db import models
 from empire.server.core.db.models import PluginTaskStatus
+from empire.server.core.exceptions import (
+    PluginExecutionException,
+    PluginValidationException,
+)
 from empire.server.core.hooks import hooks
 from empire.server.core.plugin_service import PluginService
 from .run_tasks import DeathStarTasks
@@ -45,7 +49,8 @@ class Plugin(BasePlugin):
                 plugin_id=self.info.id,
                 input=deathstar_input,
                 input_full=deathstar_input,
-                user_id=user.id,
+                # None on the auto_execute path, where there is no request user.
+                user_id=user.id if user else None,
                 status=PluginTaskStatus.started,
             )
             plugin_task.output = f"[*] Starting Recon Scan: {agent_name}\n"
@@ -54,6 +59,13 @@ class Plugin(BasePlugin):
             self.plugin_task_id = plugin_task.id
 
             agent = self.main_menu.agentsv2.get_by_id(db, agent_name)
+            if agent is None:
+                # get_by_id matches on session_id only, but the option is
+                # described as "Name of Agent" and agents are renameable, so a
+                # renamed agent lands here rather than on a stray AttributeError.
+                raise PluginValidationException(
+                    f"Agent not found: {agent_name}. Use the agent's session ID."
+                )
             self.session_id = agent.session_id
             self.listener_name = agent.listener
             params = {"Agent": self.session_id, "OutputFunction": "Out-String"}
@@ -61,59 +73,85 @@ class Plugin(BasePlugin):
                 module_id="powershell_management_get_domain_sid", options=params
             )
             res, err = self.main_menu.agenttasksv2.create_task_module(
-                db, agent, module_post_request, 0
+                db, agent, module_post_request, user
             )
 
             if err:
-                return f"[!] Error running module: {err}z"
-            else:
-                self.task_ids["domain_sid"] = res.id
+                raise PluginExecutionException(f"Error running module: {err}")
+
+            self.task_ids["domain_sid"] = res.id
             return "[*] Starting DeathStar..."
 
+        except (PluginValidationException, PluginExecutionException):
+            raise
         except Exception as e:
-            log.error(e)
+            log.error(e, exc_info=True)
             self.send_socketio_message(f"[!] {e}")
-            return False
+            raise PluginExecutionException(str(e)) from e
+
+    def _hooks(self):
+        """Every hook this plugin owns, as (event, name, callback).
+
+        Names are namespaced because the hook registry is keyed by (event,
+        name) and seven of these share BEFORE_TASKING_RESULT_HOOK -- an
+        unprefixed "get_gpp" would be silently replaced by any other plugin
+        registering that name on the same event.
+        """
+        return [
+            (
+                hooks.BEFORE_TASKING_RESULT_HOOK,
+                "deathstar_get_domain_sid",
+                self.get_domain_sid,
+            ),
+            (
+                hooks.BEFORE_TASKING_RESULT_HOOK,
+                "deathstar_get_domain_admin",
+                self.get_domain_admin,
+            ),
+            (
+                hooks.BEFORE_TASKING_RESULT_HOOK,
+                "deathstar_get_enterprise_admin",
+                self.get_enterprise_admin,
+            ),
+            (
+                hooks.BEFORE_TASKING_RESULT_HOOK,
+                "deathstar_get_domain_controller",
+                self.get_domain_controller,
+            ),
+            (
+                hooks.BEFORE_TASKING_RESULT_HOOK,
+                "deathstar_get_gpp",
+                self.get_gpp,
+            ),
+            (
+                hooks.BEFORE_TASKING_RESULT_HOOK,
+                "deathstar_get_local_admin",
+                self.get_local_admin,
+            ),
+            (
+                hooks.BEFORE_TASKING_RESULT_HOOK,
+                "deathstar_get_wmi",
+                self.get_invoke_wmi,
+            ),
+            (
+                hooks.AFTER_AGENT_CHECKIN_HOOK,
+                "deathstar_on_new_agent_checkin",
+                self.on_new_agent_checkin,
+            ),
+        ]
 
     @override
     def on_start(self, db):
-        self.install_path = self.main_menu.installPath
         self.plugin_service: PluginService = self.main_menu.pluginsv2
         self.task_ids = {}
         self.domain_controllers = None
         self.deathstar_tasks = DeathStarTasks(self.main_menu)
 
-        hooks.register_hook(
-            hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_sid", self.get_domain_sid
-        )
-        hooks.register_hook(
-            hooks.BEFORE_TASKING_RESULT_HOOK, "get_domain_admin", self.get_domain_admin
-        )
-        hooks.register_hook(
-            hooks.BEFORE_TASKING_RESULT_HOOK,
-            "get_enterprise_admin",
-            self.get_enterprise_admin,
-        )
-        hooks.register_hook(
-            hooks.BEFORE_TASKING_RESULT_HOOK,
-            "get_domain_controller",
-            self.get_domain_controller,
-        )
-        hooks.register_hook(hooks.BEFORE_TASKING_RESULT_HOOK, "get_gpp", self.get_gpp)
-        hooks.register_hook(
-            hooks.BEFORE_TASKING_RESULT_HOOK, "get_local_admin", self.get_local_admin
-        )
-        hooks.register_hook(
-            hooks.BEFORE_TASKING_RESULT_HOOK, "get_wmi", self.get_invoke_wmi
-        )
-        hooks.register_hook(
-            hooks.AFTER_AGENT_CHECKIN_HOOK,
-            "on_new_agent_checkin",
-            self.on_new_agent_checkin,
-        )
+        for event, name, callback in self._hooks():
+            hooks.register_hook(event, name, callback)
 
     def get_task(self, db, task_id: int):
-        plugin = self.plugin_service.get_by_id(db, "deathstar")
+        plugin = self.plugin_service.get_by_id(db, self.info.id)
         if plugin:
             task = (
                 db.query(models.PluginTask)
@@ -280,7 +318,6 @@ class Plugin(BasePlugin):
             return
 
         parsed = posh_object_parser(task.output)
-        gpo = {}
         for gpo in parsed:
             gpo["guid"] = gpo["file"].split("\\")[6][1:-1]
             gpo["passwords"] = gpo["passwords"][1:-1].split(", ")
@@ -294,7 +331,7 @@ class Plugin(BasePlugin):
 
         plugin_task = self.get_task(db, self.plugin_task_id)
 
-        if gpo:
+        if parsed:
             plugin_task.output += "[+] GPP Password found\n"
         else:
             plugin_task.output += "[!] No GPOs found\n"
@@ -310,6 +347,13 @@ class Plugin(BasePlugin):
     @override
     def on_stop(self, db):
         """
-        Kills additional processes that were spawned
+        Drop this plugin's hooks, so a disabled plugin stops reacting to every
+        agent's results and check-ins (and stops tasking agents from those
+        reactions).
+
+        Safe to call for a plugin that never started -- unregister_hook
+        tolerates names it doesn't know: it removes nothing, and may log that
+        it found nothing to remove.
         """
-        pass
+        for event, name, _callback in self._hooks():
+            hooks.unregister_hook(name, event)

